@@ -1,4 +1,4 @@
-name: RDP-PyAdmin-Tailscale
+name: RDP
 on:
   workflow_dispatch:
 
@@ -7,7 +7,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 3600
     steps:
-      # 1) رفع صلاحيات إلى Administrator
+      # 1) Admin elevation
       - name: Elevate
         shell: cmd
         run: |
@@ -17,8 +17,8 @@ jobs:
             exit /b
           )
 
-      # 2) Python 3.12.4 portable + PATH
-      - name: Install Portable Python 3.12.4
+      # 2) Portable Python 3.12.4
+      - name: Install Python
         shell: pwsh
         run: |
           $pyUrl = "https://www.python.org/ftp/python/3.12.4/python-3.12.4-embed-amd64.zip"
@@ -29,7 +29,7 @@ jobs:
           echo "$pyDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           & "$pyDir\python.exe" -VV
 
-      # 3) إعداد RDP (يوزر + باسورد)
+      # 3) RDP settings
       - name: Configure RDP
         shell: pwsh
         run: |
@@ -39,7 +39,7 @@ jobs:
           netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
           Restart-Service -Name TermService -Force
 
-      # 4) إنشاء الحساب
+      # 4) Create user
       - name: Create User
         shell: pwsh
         run: |
@@ -50,7 +50,7 @@ jobs:
               Add-LocalGroupMember -Group "Remote Desktop Users" -Member "TOOLBOXLAP"
           }
 
-      # 5) Tailscale فقط (بدون بدائل)
+      # 5) Install Tailscale
       - name: Install Tailscale
         shell: pwsh
         run: |
@@ -60,22 +60,24 @@ jobs:
           Start-Process msiexec.exe -Wait -ArgumentList "/i "$msi" /quiet /norestart"
           Remove-Item $msi -Force
 
-      - name: Connect Tailscale & Export IP
+      # 6) Connect & show auth link
+      - name: Connect Tailscale
         shell: pwsh
         env:
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=$env:TAILSCALE_AUTH_KEY --hostname=gh-runner
+          # Wait for IP
           $retries = 0; $tsIP = $null
-          while ([string]::IsNullOrWhiteSpace($tsIP) -and $retries -lt 10) {
+          while ([string]::IsNullOrWhiteSpace($tsIP) -and $retries -lt 20) {
               Start-Sleep -Seconds 5
               $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
               $retries++
           }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-      # 6) طباعة البيانات النهائية
-      - name: Show Access Info
+      # 7) Print access info
+      - name: Print Info
         shell: pwsh
         run: |
           python --version
@@ -85,11 +87,11 @@ jobs:
           Write-Host "Password: admin@123"
           Write-Host "=================="
 
-      # 7) إبقاء الجلسة
+      # 8) Keep alive
       - name: Keep Alive
         shell: pwsh
         run: |
           while ($true) {
-              Write-Host "[$(Get-Date)] VM still running..."
+              Write-Host "[$(Get-Date)] Running..."
               Start-Sleep -Seconds 300
           }
