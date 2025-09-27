@@ -1,4 +1,4 @@
-name: RDP + Portable Python
+name: RDP-PyAdmin-Tailscale
 on:
   workflow_dispatch:
 
@@ -7,37 +7,30 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 3600
     steps:
-      # 1) طلب صلاحية Administrator (أعلى مستوى متاح)
-      - name: Elevate to Administrator
+      # 1) رفع صلاحيات إلى Administrator
+      - name: Elevate
         shell: cmd
         run: |
           net session >nul 2>&1
-          if %errorlevel% neq 0 (
-            echo Requesting elevation...
-            powershell -Command "Start-Process cmd -ArgumentList '/c','%CD%\%~nx0','%*' -Verb RunAs"
+          if %errorLevel% neq 0 (
+            powershell -Command "Start-Process cmd -ArgumentList '/c','%~nx0','%*' -Verb RunAs"
             exit /b
           )
 
-      # 2) إنشاء مجلد أدوات + تحميل Python portable
+      # 2) Python 3.12.4 portable + PATH
       - name: Install Portable Python 3.12.4
         shell: pwsh
         run: |
           $pyUrl = "https://www.python.org/ftp/python/3.12.4/python-3.12.4-embed-amd64.zip"
-          $toolDir = "C:\toolbox"
-          $pyDir   = "$toolDir\python"
+          $pyDir = "C:\toolbox\python"
           New-Item -ItemType Directory -Path $pyDir -Force | Out-Null
-
           Invoke-WebRequest -Uri $pyUrl -OutFile "$env:TEMP\py.zip"
           Expand-Archive -Path "$env:TEMP\py.zip" -DestinationPath $pyDir -Force
-
-          # إضافة Python إلى PATH مؤقتاً لهذه الجلسة
           echo "$pyDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-          # التحقق
           & "$pyDir\python.exe" -VV
 
-      # 3) تهيئة بقية الإعدادات (RDP + Tailscale) كما في كودك القديم
-      - name: Configure Core RDP Settings
+      # 3) إعداد RDP (يوزر + باسورد)
+      - name: Configure RDP
         shell: pwsh
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -value 0 -Force
@@ -46,7 +39,8 @@ jobs:
           netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
           Restart-Service -Name TermService -Force
 
-      - name: Create RDP User
+      # 4) إنشاء الحساب
+      - name: Create User
         shell: pwsh
         run: |
           $pass = ConvertTo-SecureString "admin@123" -AsPlainText -Force
@@ -55,32 +49,47 @@ jobs:
               Add-LocalGroupMember -Group Administrators -Member "TOOLBOXLAP"
               Add-LocalGroupMember -Group "Remote Desktop Users" -Member "TOOLBOXLAP"
           }
-          echo "RDP_CREDS=User: TOOLBOXLAP | Password: admin@123" >> $env:GITHUB_ENV
 
-      - name: Install & Run Tailscale
+      # 5) Tailscale فقط (بدون بدائل)
+      - name: Install Tailscale
+        shell: pwsh
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $msi   = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $msi
+          Start-Process msiexec.exe -Wait -ArgumentList "/i "$msi" /quiet /norestart"
+          Remove-Item $msi -Force
+
+      - name: Connect Tailscale & Export IP
         shell: pwsh
         env:
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
-          # (نفس خطواتك السابقة)
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $msi = "$env:TEMP\tailscale.msi"
-          Invoke-WebRequest -Uri $tsUrl -OutFile $msi
-          Start-Process msiexec.exe -Wait -ArgumentList "/i "$msi" /quiet /norestart"
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=$env:TAILSCALE_AUTH_KEY --hostname=gh-runner
-          $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+          $retries = 0; $tsIP = $null
+          while ([string]::IsNullOrWhiteSpace($tsIP) -and $retries -lt 10) {
+              Start-Sleep -Seconds 5
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              $retries++
+          }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-      - name: Final Connectivity Check & Keep-Alive
+      # 6) طباعة البيانات النهائية
+      - name: Show Access Info
         shell: pwsh
         run: |
-          python --version                # <-- يجب يطبع Python 3.12.4
+          python --version
           Write-Host "=== RDP READY ==="
           Write-Host "Address : $env:TAILSCALE_IP"
           Write-Host "Username: TOOLBOXLAP"
           Write-Host "Password: admin@123"
-          # إبقاء الجلسة حية
+          Write-Host "=================="
+
+      # 7) إبقاء الجلسة
+      - name: Keep Alive
+        shell: pwsh
+        run: |
           while ($true) {
-              Write-Host "[$(Get-Date)] RDP & Python Active"
+              Write-Host "[$(Get-Date)] VM still running..."
               Start-Sleep -Seconds 300
           }
